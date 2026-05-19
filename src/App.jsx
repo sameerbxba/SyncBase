@@ -1223,41 +1223,6 @@ function RaidView({ proj, setModal, updateRiskStatus, updateIssueStatus }) {
   );
 }
 
-function AddRiskModal({ onClose, onSave, pal }) {
-  const [f, setF] = useState({ title: "", likelihood: "medium", impact: "high", mitigation: "", owner: "" });
-  const s = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const p = PALETTES[pal] || PALETTES.indigo;
-  return (
-    <Modal title="Add Risk" onClose={onClose} footer={<>
-      <button className="btn-gh" onClick={onClose}>Cancel</button>
-      <button className="btn-sub" style={{ background: p.primary }} disabled={!f.title.trim()} onClick={() => f.title.trim() && onSave({ ...f, id: uid(), status: "open", date: new Date().toISOString().split("T")[0] })}>Add Risk</button>
-    </>}>
-      <div className="fld"><label>Risk description</label><input value={f.title} onChange={e => s("title", e.target.value)} placeholder="What could go wrong?" autoFocus /></div>
-      <div style={{ display: "flex", gap: 14 }}>
-        <div className="fld" style={{ flex: 1 }}><label>Likelihood</label><select value={f.likelihood} onChange={e => s("likelihood", e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
-        <div className="fld" style={{ flex: 1 }}><label>Impact</label><select value={f.impact} onChange={e => s("impact", e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
-      </div>
-      <div className="fld"><label>Mitigation plan</label><textarea value={f.mitigation} onChange={e => s("mitigation", e.target.value)} placeholder="How will you reduce or avoid this risk?" /></div>
-      <div className="fld"><label>Owner</label><input value={f.owner} onChange={e => s("owner", e.target.value)} placeholder="Who's responsible for monitoring this?" /></div>
-    </Modal>
-  );
-}
-
-function AddIssueModal({ onClose, onSave, pal }) {
-  const [f, setF] = useState({ title: "", severity: "high", description: "", owner: "" });
-  const s = (k, v) => setF(p => ({ ...p, [k]: v }));
-  const p = PALETTES[pal] || PALETTES.indigo;
-  return (
-    <Modal title="Add Issue" onClose={onClose} footer={<>
-      <button className="btn-gh" onClick={onClose}>Cancel</button>
-      <button className="btn-sub" style={{ background: p.primary }} disabled={!f.title.trim()} onClick={() => f.title.trim() && onSave({ ...f, id: uid(), status: "open", date: new Date().toISOString().split("T")[0] })}>Add Issue</button>
-    </>}>
-      <div className="fld"><label>Issue description</label><input value={f.title} onChange={e => s("title", e.target.value)} placeholder="What happened?" autoFocus /></div>
-      <div className="fld"><label>Severity</label><select value={f.severity} onChange={e => s("severity", e.target.value)}><option value="high">High</option><option value="medium">Medium</option><option value="low">Low</option></select></div>
-      <div className="fld"><label>Details</label><textarea value={f.description} onChange={e => s("description", e.target.value)} placeholder="What's the impact and current situation?" /></div>
-      <div className="fld"><label>Owner</label><input value={f.owner} onChange={e => s("owner", e.target.value)} placeholder="Who's responsible for resolving this?" /></div>
-    </Modal>
-  );
 }
 
 // ── Comment Thread ──
