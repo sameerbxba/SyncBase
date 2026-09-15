@@ -1093,36 +1093,85 @@ function AddIssueModal({ onClose, onSave, pal }) {
 }
 
 // ── Alignment Scanner ──
+
+// Pre-computed demo results for sample projects (used when API unavailable)
+const DEMO_SCAN_RESULTS = {
+  "Checkout Flow Optimization": [
+    {
+      title: "Launch scope disagreement",
+      severity: "high",
+      description: "Engineering is executing on a Google Pay-first launch after the Apple Pay certification delay, but VP Revenue has not been briefed on the revised scope. The legal review stall compounds this: the team is building toward a launch date that legal has not cleared.",
+      party_a: { who: "Alex Rivera (Engineering)", assumption: "Launch proceeds with Google Pay only; Apple Pay is a fast-follow in v1.1", evidence: "Apple Pay sandbox certification delayed" },
+      party_b: { who: "Tom Bradley (VP Revenue)", assumption: "Has not been updated on revised launch scope; last sync was 8 days ago", evidence: "Brief VP Revenue on revised launch scope (action, status: todo)" },
+      recommendation: "Schedule a 15-minute briefing with Tom Bradley before end of week to align on Google Pay-first launch and get explicit sign-off on the revised scope."
+    },
+    {
+      title: "Legal blocker unresolved while engineering builds",
+      severity: "high",
+      description: "Engineering is building toward launch while the payment data retention policy lacks legal sign-off. James Morton has been unresponsive for 12 days. The team is accumulating technical debt against a legal requirement that may force changes.",
+      party_a: { who: "Engineering team", assumption: "Current tokenization approach via Stripe is compliant; proceed with implementation", evidence: "Use Stripe tokenization instead of in-house (decision, approved)" },
+      party_b: { who: "James Morton (Legal)", assumption: "Data retention policy needs review before launch; has not approved current approach", evidence: "Legal review pending on payment data retention (update, at-risk)" },
+      recommendation: "Escalate to James Morton's manager today. If legal sign-off cannot be obtained within 5 business days, evaluate whether to pause the checkout integration or accept the compliance risk with explicit executive approval."
+    }
+  ],
+  "Mobile App Redesign": [
+    {
+      title: "Launch comms not aligned with technical decision",
+      severity: "medium",
+      description: "The team decided to use biometric auth as the default login method, but the marketing stakeholder who would communicate this to users has a stale sync status and hasn't been updated in 4 days. Launch email drafts may not reflect the biometric-first approach.",
+      party_a: { who: "PM + Engineering", assumption: "Biometric auth is the default; requirements updated based on user research", evidence: "Use biometric auth as default login (decision, approved)" },
+      party_b: { who: "Priya Patel (Marketing)", assumption: "Working from previous requirements; last synced 4 days ago, sync status: needs-update", evidence: "Draft launch email sequence (action, status: todo, overdue)" },
+      recommendation: "Sync Priya on the biometric-first decision before she drafts launch emails. The overdue email sequence task suggests she may be working from outdated specs."
+    }
+  ],
+  "Internal Knowledge Base": [],
+  "Customer Onboarding Revamp": [],
+};
+
+// Sanitize artifact text to prevent prompt injection
+const sanitizeForLLM = (text) => {
+  if (!text || typeof text !== "string") return "";
+  // Remove instruction-like patterns
+  return text
+    .replace(/(?:ignore|disregard|forget|override|bypass|skip)[\s]+(?:all|any|previous|prior|above|the)[\s]+(?:instructions|rules|prompts|guidelines|constraints)/gi, "[content removed]")
+    .replace(/(?:you are|act as|pretend to be|roleplay|system prompt|you must|respond with|output only)/gi, "[content removed]")
+    .replace(/```[\s\S]*?```/g, "[code block removed]")
+    .slice(0, 500); // Truncate excessively long fields
+};
+
 function AlignmentTab({ proj, pal }) {
   const [results, setResults] = useState(null);
   const [scanning, setScanning] = useState(false);
   const [error, setError] = useState("");
   const [lastScan, setLastScan] = useState(null);
+  const [isDemo, setIsDemo] = useState(false);
 
   const runScan = async () => {
     setScanning(true);
     setError("");
+    setIsDemo(false);
 
-    // Build the artifact payload — group by author/team
+    // Build minimized payload — only fields needed for conflict detection
     const artifacts = [];
-
     (proj.updates || []).forEach(u => {
-      artifacts.push({ type: "update", title: u.title, author: u.author, date: u.date, status: u.status, body: u.body || "" });
+      artifacts.push({ type: "update", title: sanitizeForLLM(u.title), author: sanitizeForLLM(u.author), status: u.status, body: sanitizeForLLM(u.body) });
     });
     (proj.decisions || []).forEach(d => {
-      artifacts.push({ type: "decision", title: d.title, author: d.decidedBy, date: d.date, rationale: d.rationale, alternatives: d.alternatives?.join(", ") || "", impact: d.impact });
+      artifacts.push({ type: "decision", title: sanitizeForLLM(d.title), decidedBy: sanitizeForLLM(d.decidedBy), rationale: sanitizeForLLM(d.rationale), impact: d.impact });
     });
     (proj.actions || []).forEach(a => {
-      artifacts.push({ type: "action", title: a.title, owner: a.owner, dueDate: a.dueDate, status: a.status, priority: a.priority });
+      artifacts.push({ type: "action", title: sanitizeForLLM(a.title), owner: sanitizeForLLM(a.owner), status: a.status, priority: a.priority });
     });
+    // Risks and issues — title and status only
     (proj.risks || []).forEach(r => {
-      artifacts.push({ type: "risk", title: r.title, owner: r.owner, status: r.status, mitigation: r.mitigation });
+      artifacts.push({ type: "risk", title: sanitizeForLLM(r.title), owner: sanitizeForLLM(r.owner), status: r.status });
     });
     (proj.issues || []).forEach(i => {
-      artifacts.push({ type: "issue", title: i.title, owner: i.owner, status: i.status, description: i.description });
+      artifacts.push({ type: "issue", title: sanitizeForLLM(i.title), owner: sanitizeForLLM(i.owner), status: i.status });
     });
 
-    const stakeholderContext = (proj.stakeholders || []).map(s => `${s.name} (${s.role}, ${s.team})`).join("; ");
+    // Stakeholder context — names and roles only, no other PII
+    const stakeholderContext = (proj.stakeholders || []).map(s => `${s.name} (${s.role}, ${s.team}, sync: ${s.syncStatus})`).join("; ");
 
     if (artifacts.length < 3) {
       setError("Not enough project data to scan. Add more updates, decisions, or actions first.");
@@ -1132,8 +1181,7 @@ function AlignmentTab({ proj, pal }) {
 
     const prompt = `You are an alignment analyst for cross-functional product teams. You read across a project's artifacts — updates, decisions, actions, risks, and issues — from different authors and teams, and you identify where stated assumptions DIVERGE across groups.
 
-PROJECT: ${proj.name}
-DESCRIPTION: ${proj.description || ""}
+PROJECT: ${sanitizeForLLM(proj.name)}
 STAKEHOLDERS: ${stakeholderContext}
 
 PROJECT ARTIFACTS:
@@ -1141,9 +1189,9 @@ ${JSON.stringify(artifacts, null, 1)}
 
 TASK: Analyze these artifacts for assumption misalignment — places where different people or teams appear to be working from different assumptions about scope, timeline, priorities, dependencies, or what "done" means.
 
-IMPORTANT: Precision over recall. Do NOT flag trivial or speculative conflicts. Only surface conflicts where the evidence strongly suggests two parties hold genuinely different assumptions that could cost the project its schedule, budget, or deliverable quality. If you cannot find strong evidence of real misalignment, say so honestly — do not manufacture conflicts.
+IMPORTANT: Precision over recall. Do NOT flag trivial or speculative conflicts. Only surface conflicts where the evidence strongly suggests two parties hold genuinely different assumptions that could cost the project its schedule, budget, or deliverable quality. If you cannot find strong evidence of real misalignment, return an empty array.
 
-Respond ONLY with a JSON array of 1-3 conflicts (or empty array if none found). No other text, no markdown, no backticks. Each object must have:
+Respond ONLY with a JSON array of 0-3 conflicts. No other text, no markdown, no backticks. Each object must have:
 - "title": short conflict name (under 10 words)
 - "severity": "high", "medium", or "low"
 - "description": 2-3 sentences explaining the divergence
@@ -1164,9 +1212,7 @@ Return ONLY the JSON array.`;
         }),
       });
 
-      if (!response.ok) {
-        throw new Error(`API returned ${response.status}`);
-      }
+      if (!response.ok) throw new Error(`API returned ${response.status}`);
 
       const data = await response.json();
       const text = data.content?.map(c => c.text || "").join("") || "";
@@ -1175,8 +1221,16 @@ Return ONLY the JSON array.`;
       setResults(Array.isArray(parsed) ? parsed : []);
       setLastScan(new Date().toLocaleString());
     } catch (err) {
-      console.error("Alignment scan error:", err);
-      setError("Could not complete the scan. Please try again.");
+      // API unavailable (Vercel deployment) — use demo results for sample projects
+      console.warn("Alignment scanner API unavailable, using demo results:", err.message);
+      const demoKey = Object.keys(DEMO_SCAN_RESULTS).find(k => proj.name.includes(k) || k.includes(proj.name));
+      if (demoKey !== undefined) {
+        setResults(DEMO_SCAN_RESULTS[demoKey] || []);
+        setIsDemo(true);
+        setLastScan(new Date().toLocaleString());
+      } else {
+        setError("Alignment scanning requires the AI backend, which is not available in this prototype deployment. In the Claude artifact environment, the scanner calls the Anthropic API directly. In production, this would route through a backend proxy.");
+      }
     }
     setScanning(false);
   };
@@ -1195,7 +1249,13 @@ Return ONLY the JSON array.`;
         </button>
       </div>
 
-      {error && <div className="auth-err" style={{ marginBottom: 16, background: "rgba(220,38,38,.08)", border: "1px solid rgba(220,38,38,.15)" }}>{error}</div>}
+      {error && <div style={{ padding: "12px 16px", borderRadius: "var(--rs)", background: "rgba(217,119,6,.08)", border: "1px solid rgba(217,119,6,.15)", color: "#92400e", fontSize: 13, lineHeight: 1.6, marginBottom: 16 }}><strong>Scanner unavailable:</strong> {error}</div>}
+
+      {isDemo && (
+        <div style={{ padding: "10px 14px", borderRadius: "var(--rs)", background: "rgba(99,102,241,.06)", border: "1px solid rgba(99,102,241,.12)", color: "#6366f1", fontSize: 12, marginBottom: 14, display: "flex", alignItems: "center", gap: 6 }}>
+          <I.alert size={13} /> Demo mode — showing pre-computed results for this sample project. In the Claude artifact environment, the scanner calls the Anthropic API with live project data.
+        </div>
+      )}
 
       {results && results.length === 0 && (
         <div className="align-empty">
@@ -1220,24 +1280,20 @@ Return ONLY the JSON array.`;
                 </div>
                 <p style={{ fontSize: 13, color: "var(--t2)", lineHeight: 1.6, marginBottom: 14 }}>{r.description}</p>
 
-                {/* Party A */}
                 <div className="align-evidence">
                   <div style={{ fontWeight: 600, color: "var(--txt)", marginBottom: 4 }}>{r.party_a?.who}</div>
                   <div>Assumption: {r.party_a?.assumption}</div>
                   <div className="align-evidence-src">Evidence: "{r.party_a?.evidence}"</div>
                 </div>
 
-                {/* vs */}
                 <div style={{ textAlign: "center", padding: "6px 0", fontSize: 11, fontWeight: 700, color: sev.c, letterSpacing: ".08em" }}>CONFLICTS WITH</div>
 
-                {/* Party B */}
                 <div className="align-evidence">
                   <div style={{ fontWeight: 600, color: "var(--txt)", marginBottom: 4 }}>{r.party_b?.who}</div>
                   <div>Assumption: {r.party_b?.assumption}</div>
                   <div className="align-evidence-src">Evidence: "{r.party_b?.evidence}"</div>
                 </div>
 
-                {/* Recommendation */}
                 <div style={{ marginTop: 14, padding: "10px 14px", borderRadius: "var(--rs)", background: `${pal.primary}08`, border: `1px solid ${pal.primary}20` }}>
                   <div style={{ fontSize: 11, fontWeight: 600, color: pal.primary, marginBottom: 3 }}>RECOMMENDED ACTION</div>
                   <div style={{ fontSize: 13, color: "var(--txt)", lineHeight: 1.5 }}>{r.recommendation}</div>
@@ -1250,7 +1306,7 @@ Return ONLY the JSON array.`;
 
       {lastScan && (
         <div className="align-timestamp">
-          <I.clock size={11} /> Last scanned: {lastScan}
+          <I.clock size={11} /> Last scanned: {lastScan}{isDemo ? " (demo)" : ""}
         </div>
       )}
 
@@ -2616,7 +2672,72 @@ function ProjectList({ projects, onSelect, onNew, onImport, onHome, dark, toggle
 }
 
 // ── Auth Page ──
-function AuthPage({ onAuth }) {
+// ── NIST Assessment (ungated) ──
+function NistAssessmentPage({ onBack }) {
+  const sections = [
+    { title: "1. Intended Use Statement", content: [
+      { h: "1.1 System Description", p: "SyncBase is a cross-functional alignment tool for Product Managers. It provides a communication layer alongside existing project management tools (Jira, Azure DevOps, Asana) to track decision rationale, stakeholder synchronization, and cross-team accountability through a unified RAID log (Risks, Actions, Issues, Decisions)." },
+      { h: "1.2 AI Components", p: "SyncBase incorporates one AI feature and one rule-based feature." },
+      { h: "AI-Powered: Alignment Scanner", p: "The Alignment Scanner reads across all of a project's artifacts — timeline updates, decisions, action items, risks, and issues — grouped by author and team. It sends the artifact set to an LLM (Claude, Anthropic) via API with a prompt that asks: identify where stated assumptions diverge across groups. The model returns one to three conflicts, each citing the specific artifact from each party as evidence, and a recommended action for the PM to consider. The scanner is advisory — it surfaces conflicts and suggests responses, but the PM decides whether and how to act. It is governed by a precision-over-recall design philosophy (see Section 4)." },
+      { h: "Rule-Based: Weekly Digest Generator", p: "The Weekly Digest is deterministic string assembly — it is not LLM-powered. It reads structured project data and concatenates them into a formatted summary using template logic. No model call is made." },
+    ]},
+    { title: "2. Risk Assessment (NIST AI RMF Core Functions)", content: [
+      { h: "Identified Risks (Scanner)", p: "S-01: Hallucinated conflict — LLM generates a plausible-sounding conflict not supported by input artifacts. S-02: False conflict from language mismatch — different terminology for the same assumption flagged as divergence. S-03: Missed real conflict — genuine divergence not detected (accepted risk per precision-over-recall decision). S-04: Prompt injection via artifact text — user-entered text manipulates scanner output. S-05: Over-reliance on scanner output — PM treats scanner silence as confirmation of alignment. S-06: Data exposure via API call — full artifact set transmitted to Anthropic API." },
+      { h: "Key Treatments", p: "Evidence-grounded generation: prompt requires each conflict to cite specific artifacts. Confidence filtering: maximum 3 results, precision over recall. Explicit coverage caveat: output states it is not exhaustive. Human-in-the-loop: PM reviews output, no automated action. Input sanitization and data minimization: planned for production." },
+    ]},
+    { title: "3. Model Card", content: [
+      { h: "Model", p: "SyncBase Alignment Scanner. LLM-based cross-document conflict detection via Claude Sonnet (Anthropic) API. No custom fine-tuning." },
+      { h: "Task", p: "Read across a project's full artifact set grouped by author and team. Identify where stated assumptions diverge. Return 1-3 high-confidence conflicts with cited evidence and recommended actions." },
+      { h: "Known Failure Modes", p: "False conflicts from linguistic differences; missed conflicts when similar language hides different meanings; hallucination when input data is sparse; inability to detect sarcasm or hedging." },
+      { h: "Recommended Use", p: "PM reviews flagged conflicts, verifies cited evidence against source artifacts, and decides whether to act. Scanner output is a starting point for investigation, not a conclusion." },
+    ]},
+    { title: "4. Governance Decision: Precision Over Recall", content: [
+      { h: "Decision", p: "The Alignment Scanner prioritizes surfacing fewer, more accurate conflicts over surfacing every possible inconsistency. This is a governance choice, not a technical limitation." },
+      { h: "Rationale", p: "The cost of false positives is higher than the cost of false negatives in this context. A PM who receives 15 low-confidence alerts stops reading them. A missed alert is a single-instance failure; alert fatigue is a systemic failure that disables the entire tool. PMs already have compensating controls for false negatives: meetings, Slack, 1:1s. Trust is the adoption bottleneck, not coverage." },
+      { h: "Accepted Tradeoffs", p: "What we gain: higher PM trust in scanner output, lower alert fatigue, faster adoption, focused signal. What we lose: some genuine issues will not be surfaced, coverage gaps may exist in complex multi-team projects, PMs may develop false confidence that if SyncBase didn't flag it, it's fine (over-reliance risk S-05)." },
+      { h: "Mitigations", p: "Scanner output states it is not exhaustive. Production version would allow adjustable sensitivity. Escalation path for missed issues creates a feedback loop. Quarterly recall audit compares scanner output to actual project outcomes." },
+      { h: "Decommission Criteria", p: "The scanner should be decommissioned if: conflict precision drops below 50% for two consecutive months, hallucinated conflicts recur after prompt revision, PM action rate drops below 10% for 60 days, or a scanner miss contributes to a material project failure." },
+    ]},
+  ];
+
+  return (
+    <div style={{ minHeight: "100vh", background: "#0f0d1a", color: "#e2e8f0", fontFamily: "var(--f, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif)" }}>
+      <div style={{ maxWidth: 760, margin: "0 auto", padding: "40px 24px" }}>
+        <button onClick={onBack} style={{ background: "none", border: "none", color: "#818cf8", fontSize: 13, fontFamily: "inherit", cursor: "pointer", marginBottom: 24, display: "flex", alignItems: "center", gap: 6 }}>
+          ← Back to sign in
+        </button>
+        <div style={{ textAlign: "center", marginBottom: 40 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 10, marginBottom: 16 }}>
+            <div style={{ width: 36, height: 36, borderRadius: 10, background: "linear-gradient(135deg, #6366f1, #8b5cf6)", display: "flex", alignItems: "center", justifyContent: "center", color: "#fff", fontWeight: 800, fontSize: 16 }}>S</div>
+            <span style={{ fontSize: 20, fontWeight: 700, color: "#fff" }}>SyncBase</span>
+          </div>
+          <h1 style={{ fontSize: 24, fontWeight: 700, color: "#fff", marginBottom: 8 }}>NIST AI Risk Management Framework Assessment</h1>
+          <p style={{ fontSize: 14, color: "#94a3b8" }}>Version 1.0 | September 2026 | Aligned to NIST AI RMF 1.0 (January 2023)</p>
+          <p style={{ fontSize: 13, color: "#64748b", marginTop: 4 }}>Prepared by Sameer Athili</p>
+        </div>
+
+        {sections.map((sec, si) => (
+          <div key={si} style={{ marginBottom: 32 }}>
+            <h2 style={{ fontSize: 18, fontWeight: 700, color: "#a5b4fc", marginBottom: 16, paddingBottom: 8, borderBottom: "1px solid rgba(255,255,255,.08)" }}>{sec.title}</h2>
+            {sec.content.map((item, ii) => (
+              <div key={ii} style={{ marginBottom: 16 }}>
+                <h3 style={{ fontSize: 14, fontWeight: 600, color: "#c7d2fe", marginBottom: 6 }}>{item.h}</h3>
+                <p style={{ fontSize: 13.5, lineHeight: 1.7, color: "#cbd5e1" }}>{item.p}</p>
+              </div>
+            ))}
+          </div>
+        ))}
+
+        <div style={{ textAlign: "center", padding: "24px 0", borderTop: "1px solid rgba(255,255,255,.08)", color: "#64748b", fontSize: 12 }}>
+          <p>Full assessment document available on request. Applicable to SyncBase v1.5 — Alignment Scanner.</p>
+          <p style={{ marginTop: 4 }}>Download the complete NIST AI RMF assessment with risk register, treatment plans, metrics, and decommission criteria from the <a href="https://github.com/sameerbxba/SyncBase" target="_blank" rel="noopener noreferrer" style={{ color: "#818cf8" }}>GitHub repository</a>.</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AuthPage({ onAuth, onShowNist }) {
   const [mode, setMode] = useState("login");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -2755,6 +2876,14 @@ function AuthPage({ onAuth }) {
           {mode === "signup" && <>Already have an account? <button onClick={() => go("login")}>Sign in</button></>}
           {mode === "forgot" && <>Remember your password? <button onClick={() => go("login")}>Sign in</button></>}
         </div>
+
+        {onShowNist && (
+          <div style={{ textAlign: "center", marginTop: 16, paddingTop: 16, borderTop: "1px solid rgba(255,255,255,.08)" }}>
+            <button onClick={onShowNist} style={{ background: "none", border: "none", color: "rgba(255,255,255,.4)", fontSize: 12, fontFamily: "var(--f)", cursor: "pointer", transition: "color .2s" }} onMouseOver={e => e.target.style.color = "#818cf8"} onMouseOut={e => e.target.style.color = "rgba(255,255,255,.4)"}>
+              NIST AI RMF Assessment
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -2867,6 +2996,7 @@ export default function App() {
   const [activeId, setActiveId] = useState(null);
   const [modal, setModal] = useState(null);
   const [dark, setDark] = useState(false);
+  const [nistView, setNistView] = useState(false);
   const init = useRef(false);
 
   // ── Boot: check auth, then load projects ──
@@ -2936,7 +3066,7 @@ export default function App() {
     return (
       <div className={dark ? "dark" : ""}>
         <style>{css}</style>
-        <AuthPage onAuth={(u) => { handleAuth(u); }} />
+        {nistView ? <NistAssessmentPage onBack={() => setNistView(false)} /> : <AuthPage onAuth={(u) => { handleAuth(u); }} onShowNist={() => setNistView(true)} />}
       </div>
     );
   }
