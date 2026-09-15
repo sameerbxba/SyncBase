@@ -1543,7 +1543,7 @@ function Dashboard({ project: proj, onBack, onUpdate, onDelete, dark, toggleDark
   const healthColor = healthScore >= 75 ? "#059669" : healthScore >= 50 ? "#d97706" : "#dc2626";
   const healthLabel = healthScore >= 75 ? "Healthy" : healthScore >= 50 ? "Needs Attention" : "At Risk";
 
-  // ── AI Weekly Digest ──
+  // ── Weekly Digest ──
   const generateDigest = () => {
     const recentUpdates = proj.updates.slice(0, 3);
     const overdueItems = proj.actions.filter(a => a.status !== "done" && isOverdue(a.dueDate));
@@ -1629,13 +1629,13 @@ function Dashboard({ project: proj, onBack, onUpdate, onDelete, dark, toggleDark
             </div>
           </div>
 
-          {/* AI Weekly Digest */}
+          {/* Weekly Digest */}
           <div style={{ background: "var(--card)", border: "1px solid var(--bl)", borderRadius: "var(--r)", padding: 22, marginBottom: 20 }}>
             <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: showDigest ? 16 : 0 }}>
               <div>
                 <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
                   <I.zap size={16} color={pal.primary} />
-                  <span style={{ fontWeight: 600, fontSize: 15 }}>AI Weekly Digest</span>
+                  <span style={{ fontWeight: 600, fontSize: 15 }}>Weekly Digest</span>
                   <span style={{ fontSize: 10, padding: "2px 8px", borderRadius: 100, background: `${pal.primary}14`, color: pal.primary, fontWeight: 600 }}>NEW</span>
                 </div>
                 <div style={{ fontSize: 12, color: "var(--t3)", marginTop: 3 }}>Auto-generated stakeholder summary you can share directly</div>
@@ -2683,7 +2683,7 @@ function NistAssessmentPage({ onBack }) {
     ]},
     { title: "2. Risk Assessment (NIST AI RMF Core Functions)", content: [
       { h: "Identified Risks (Scanner)", p: "S-01: Hallucinated conflict — LLM generates a plausible-sounding conflict not supported by input artifacts. S-02: False conflict from language mismatch — different terminology for the same assumption flagged as divergence. S-03: Missed real conflict — genuine divergence not detected (accepted risk per precision-over-recall decision). S-04: Prompt injection via artifact text — user-entered text manipulates scanner output. S-05: Over-reliance on scanner output — PM treats scanner silence as confirmation of alignment. S-06: Data exposure via API call — full artifact set transmitted to Anthropic API." },
-      { h: "Key Treatments", p: "Evidence-grounded generation: prompt requires each conflict to cite specific artifacts. Confidence filtering: maximum 3 results, precision over recall. Explicit coverage caveat: output states it is not exhaustive. Human-in-the-loop: PM reviews output, no automated action. Input sanitization and data minimization: planned for production." },
+      { h: "Key Treatments", p: "Evidence-grounded generation: prompt requires each conflict to cite specific artifacts. Confidence filtering: maximum 3 results, precision over recall. Explicit coverage caveat: output states it is not exhaustive. Human-in-the-loop: PM reviews output, no automated action. Input sanitization: implemented (instruction patterns stripped, fields truncated). Data minimization: partial (dates and descriptions excluded, rationale still transmitted)." },
     ]},
     { title: "3. Model Card", content: [
       { h: "Model", p: "SyncBase Alignment Scanner. LLM-based cross-document conflict detection via Claude Sonnet (Anthropic) API. No custom fine-tuning." },
